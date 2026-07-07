@@ -14,7 +14,10 @@ local device_management = require "st.zigbee.device_management"
 local LEVEL_UPDATE_TIMEOUT = "__level_update_timeout"
 local MOST_RECENT_SETLEVEL = "__most_recent_setlevel"
 
-
+local utils = require "st.utils"
+local LATEST_TARGET_LEVEL = "latest_target_level"
+local TARGET_LEVEL_TIME_OUT = "_target_level_timeout"
+local TARGET_LEVEL_TIME_OUT_SECONDS = 30 
 
 local function default_response_handler(driver, device, zb_message)
   local is_success = zb_message.body.zcl_body.status.value
@@ -70,6 +73,19 @@ end
 
 local function current_position_attr_handler(driver, device, value, zb_rx)
   local current_level = device:get_latest_state("main", capabilities.windowShadeLevel.ID, capabilities.windowShadeLevel.shadeLevel.NAME)
+  
+  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
+  if  latest_target_level ~= nil then
+    if utils.round(current_level) == utils.round(latest_target_level) then
+      device:set_field(LATEST_TARGET_LEVEL, nil)
+      local timer = device:get_field(TARGET_LEVEL_TIME_OUT)
+      if timer ~= nil then
+        device.thread:cancel_timer(timer)
+        device:set_field(TARGET_LEVEL_TIME_OUT, nil)
+      end
+    end
+  end
+
   if current_level then current_level = 100 - current_level end -- convert to the zigbee value
 
   if value.value == 0 then
@@ -114,6 +130,38 @@ local function current_position_attr_handler(driver, device, value, zb_rx)
   device:emit_event(capabilities.windowShadeLevel.shadeLevel(100 - value.value))
 end
 
+local function window_shade_step_level_cmd(driver, device, command)
+  local step = command.args.stepSize or command.args[1]
+
+  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
+  local current_level = latest_target_level or
+    device:get_latest_state("main", capabilities.windowShadeLevel.ID,
+      capabilities.windowShadeLevel.shadeLevel.NAME) or 0
+
+  local target_level = current_level + step
+  if target_level > 100 then
+    target_level = 100
+  elseif target_level < 0 then
+    target_level = 0
+  end
+  target_level = utils.round(target_level)
+
+  device:set_field(LATEST_TARGET_LEVEL, target_level)
+
+  local old_timer = device:get_field(TARGET_LEVEL_TIME_OUT)
+  if old_timer ~= nil then
+    device.thread:cancel_timer(old_timer)
+  end
+
+  local timer = device.thread:call_with_delay(TARGET_LEVEL_TIME_OUT_SECONDS, function(d)
+    device:set_field(LATEST_TARGET_LEVEL, nil)
+    device:set_field(TARGET_LEVEL_TIME_OUT, nil)
+  end)
+  device:set_field(TARGET_LEVEL_TIME_OUT, timer)
+
+  set_shade_level(driver, device, target_level, command)
+end
+
 local yoolax_window_shade = {
   NAME = "yoolax window shade",
   capability_handlers = {
@@ -121,6 +169,9 @@ local yoolax_window_shade = {
       [capabilities.windowShadeLevel.commands.setShadeLevel.NAME] = window_shade_level_cmd,
       [capabilities.windowShade.commands.open.NAME] = set_window_shade_level(100), -- a report of 0 = open
       [capabilities.windowShade.commands.close.NAME] = set_window_shade_level(0), -- a report of 100 = closed
+    },
+    [capabilities.statelessWindowShadeLevelStep.ID] = {
+      [capabilities.statelessWindowShadeLevelStep.commands.stepShadeLevel.NAME] = window_shade_step_level_cmd
     },
     [capabilities.windowShadePreset.ID] = {
       [capabilities.windowShadePreset.commands.presetPosition.NAME] = window_shade_preset_cmd
