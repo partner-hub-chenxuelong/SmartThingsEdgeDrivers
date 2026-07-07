@@ -8,6 +8,7 @@ local FrameCtrl = require "st.zigbee.zcl.frame_ctrl"
 local data_types = require "st.zigbee.data_types"
 local aqara_utils = require "aqara/aqara_utils"
 local window_treatment_utils = require "window_treatment_utils"
+local utils = require "st.utils"
 
 local Basic = clusters.Basic
 local WindowCovering = clusters.WindowCovering
@@ -22,6 +23,11 @@ local MULTISTATE_ATTRIBUTE_ID = 0x0055
 local ROTATE_UP_VALUE = 0x0004
 local ROTATE_DOWN_VALUE = 0x0005
 
+local LATEST_TARGET_LEVEL = "latest_target_level"
+local TARGET_LEVEL_TIME_OUT = "_target_level_timeout"
+local TARGET_LEVEL_TIME_OUT_SECONDS = 30
+
+
 
 local function window_shade_level_cmd(driver, device, command)
   -- Cannot be controlled if not initialized
@@ -32,6 +38,39 @@ local function window_shade_level_cmd(driver, device, command)
   end
 end
 
+
+local function window_shade_step_level_cmd(driver, device, command)
+  local step = command.args.stepSize or command.args[1]
+
+  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
+  local current_level = latest_target_level or
+    device:get_latest_state("main", capabilities.windowShadeLevel.ID,
+      capabilities.windowShadeLevel.shadeLevel.NAME) or 0
+
+  local ui_target_level = current_level + step
+  if ui_target_level > 100 then
+    ui_target_level = 100
+  elseif ui_target_level < 0 then
+    ui_target_level = 0
+  end
+  ui_target_level = utils.round(ui_target_level)
+
+  device:set_field(LATEST_TARGET_LEVEL, ui_target_level)
+
+  local old_timer = device:get_field(TARGET_LEVEL_TIME_OUT)
+  if old_timer ~= nil then
+    device.thread:cancel_timer(old_timer)
+  end
+
+  local timer = device.thread:call_with_delay(TARGET_LEVEL_TIME_OUT_SECONDS, function(d)
+    device:set_field(LATEST_TARGET_LEVEL, nil)
+    device:set_field(TARGET_LEVEL_TIME_OUT, nil)
+  end)
+  device:set_field(TARGET_LEVEL_TIME_OUT, timer)
+  
+  local new_command = { args = { shadeLevel = ui_target_level }, component = command.component }
+  window_shade_level_cmd(driver, device, new_command)
+end
 local function window_shade_open_cmd(driver, device, command)
   -- Cannot be controlled if not initialized
   local initialized = device:get_latest_state("main", initializedStateWithGuide.ID,
@@ -119,6 +158,9 @@ local aqara_roller_shade_handler = {
   capability_handlers = {
     [capabilities.windowShadeLevel.ID] = {
       [capabilities.windowShadeLevel.commands.setShadeLevel.NAME] = window_shade_level_cmd
+    },
+    [capabilities.statelessWindowShadeLevelStep.ID] = {
+      [capabilities.statelessWindowShadeLevelStep.commands.stepShadeLevel.NAME] = window_shade_step_level_cmd
     },
     [capabilities.windowShade.ID] = {
       [capabilities.windowShade.commands.open.NAME] = window_shade_open_cmd,
