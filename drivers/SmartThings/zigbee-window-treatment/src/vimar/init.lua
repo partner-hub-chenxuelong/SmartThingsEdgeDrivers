@@ -17,28 +17,12 @@ local windowShade = capabilities.windowShade.windowShade
 local VIMAR_SHADES_OPENING = "_vimarShadesOpening"
 local VIMAR_SHADES_CLOSING = "_vimarShadesClosing"
 
-local utils = require "st.utils"
-local LATEST_TARGET_LEVEL = "latest_target_level"
-local TARGET_LEVEL_TIME_OUT = "_target_level_timeout"
-local TARGET_LEVEL_TIME_OUT_SECONDS = 30 
-
 -- UTILS to check manufacturer details
 
 -- ATTRIBUTE HANDLER FOR CurrentPositionLiftPercentage
 local function current_position_attr_handler(driver, device, value, zb_rx)
   -- Shade level is inverted
   local level = 100 - value.value
-  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
-  if  latest_target_level ~= nil then
-    if utils.round(level) == utils.round(latest_target_level) then
-      device:set_field(LATEST_TARGET_LEVEL, nil)
-      local timer = device:get_field(TARGET_LEVEL_TIME_OUT)
-      if timer ~= nil then
-        device.thread:cancel_timer(timer)
-        device:set_field(TARGET_LEVEL_TIME_OUT, nil)
-      end
-    end
-  end
   -- Clear states
   device:set_field(VIMAR_SHADES_CLOSING, false)
   device:set_field(VIMAR_SHADES_OPENING, false)
@@ -144,9 +128,7 @@ end
 local function window_shade_step_level_cmd(driver, device, command)
   local step = command.args.stepSize or command.args[1]
 
-  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
-  local current_level = latest_target_level or
-    device:get_latest_state("main", capabilities.windowShadeLevel.ID,
+  local current_level = device:get_latest_state("main", capabilities.windowShadeLevel.ID,
       capabilities.windowShadeLevel.shadeLevel.NAME) or 0
 
   local target_level = current_level + step
@@ -156,19 +138,6 @@ local function window_shade_step_level_cmd(driver, device, command)
     target_level = 0
   end
   target_level = utils.round(target_level)
-
-  device:set_field(LATEST_TARGET_LEVEL, target_level)
-
-  local old_timer = device:get_field(TARGET_LEVEL_TIME_OUT)
-  if old_timer ~= nil then
-    device.thread:cancel_timer(old_timer)
-  end
-
-  local timer = device.thread:call_with_delay(TARGET_LEVEL_TIME_OUT_SECONDS, function(d)
-    device:set_field(LATEST_TARGET_LEVEL, nil)
-    device:set_field(TARGET_LEVEL_TIME_OUT, nil)
-  end)
-  device:set_field(TARGET_LEVEL_TIME_OUT, timer)
 
   command.args.shadeLevel = target_level
   window_shade_set_level_handler(driver, device, command)
