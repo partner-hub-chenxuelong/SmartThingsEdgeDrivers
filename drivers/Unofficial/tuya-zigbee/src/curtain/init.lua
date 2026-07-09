@@ -23,6 +23,9 @@ local packet_id = 0
 local PRESET_LEVEL = 50
 local PRESET_LEVEL_KEY = "_presetLevel"
 
+local LATEST_TARGET_LEVEL = "latest_target_level"
+
+
 local FINGERPRINTS = {
   { mfr = "_TZE284_nladmfvf", model = "TS0601"}
 }
@@ -137,6 +140,13 @@ local function tuya_cluster_handler(driver, device, zb_rx)
   -- dp means data point in tuya payload format
   local dp = raw:byte(3)
   local dp_data = raw:byte(10)
+
+  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
+  if latest_target_level ~= nil then
+    device:set_field(LATEST_TARGET_LEVEL, nil)
+  end
+
+
   if dp == 0x03  then
     window_shade_level_event = capabilities.windowShadeLevel.shadeLevel(dp_data)
     if dp_data == 0 then
@@ -151,6 +161,23 @@ local function tuya_cluster_handler(driver, device, zb_rx)
     device:emit_event(window_shade_level_event)
     device:emit_event(window_shade_val_event)
   end
+end
+
+local function handle_step_shade_level(driver, device, command)
+  local step = command.args.stepSize or command.args[1] or (command.positional_args and command.positional_args.stepSize)
+
+  local latest_target_level = device:get_field(LATEST_TARGET_LEVEL)
+  local current_level = latest_target_level or
+    device:get_latest_state("main", capabilities.windowShadeLevel.ID,
+      capabilities.windowShadeLevel.shadeLevel.NAME) or 0
+
+  local target_level = utils.clamp_value(current_level + step, 0, 100)
+  target_level = utils.round(target_level)
+
+  device:set_field(LATEST_TARGET_LEVEL, target_level)
+
+  local new_command = { args = { shadeLevel = target_level }, component = command.component }
+  window_shade_level(driver, device, new_command)
 end
 
 local tuya_curtain_driver = {
@@ -169,6 +196,9 @@ local tuya_curtain_driver = {
     },
     [capabilities.windowShadeLevel.ID] = {
       [capabilities.windowShadeLevel.commands.setShadeLevel.NAME] = window_shade_level
+    },
+    [capabilities.statelessWindowShadeLevelStep.ID] = {
+      [capabilities.statelessWindowShadeLevelStep.commands.stepShadeLevel.NAME] = handle_step_shade_level
     },
     [capabilities.windowShadePreset.ID] = {
       [capabilities.windowShadePreset.commands.presetPosition.NAME] = window_shade_preset,
