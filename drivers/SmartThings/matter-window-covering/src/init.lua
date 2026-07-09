@@ -9,6 +9,7 @@ local im = require "st.matter.interaction_model"
 local log = require "log"
 local clusters = require "st.matter.clusters"
 local MatterDriver = require "st.matter.driver"
+local utils = require "st.utils"
 
 local CURRENT_LIFT = "__current_lift"
 local CURRENT_TILT = "__current_tilt"
@@ -186,7 +187,7 @@ local function handle_shade_level(driver, device, cmd)
 end
 
 -- window shade step control handler
-local function window_shade_step_level_cmd(driver, device, cmd)
+local function handle_step_shade_level(driver, device, cmd)
   local step = cmd.args.stepSize
 
   -- Priority: use target_level if exists, otherwise use latest state
@@ -196,10 +197,7 @@ local function window_shade_step_level_cmd(driver, device, cmd)
       capabilities.windowShadeLevel.shadeLevel.NAME) or 0
 
   -- Calculate new target (user level: 0-100, 0=closed, 100=open)
-  local target_level = current_level + step
-  if target_level > 100 then target_level = 100
-  elseif target_level < 0 then target_level = 0
-  end
+  local target_level = utils.clamp_value(current_level + step, 0, 100)
 
   -- Update tracking state
   device:set_field(LATEST_TARGET_LEVEL, target_level)
@@ -217,10 +215,12 @@ local function window_shade_step_level_cmd(driver, device, cmd)
   end)
   device:set_field(TARGET_LEVEL_TIME_OUT, timer)
 
-  -- Matter uses inverted logic (like IKEA)
-  -- User level: 0=closed, 100=open
-  -- Matter level: 10000=open, 0=closed (in percent100ths)
-  local lift_percentage_value = 100 - target_level
+  local lift_percentage_value
+  if device:get_field(REVERSE_POLARITY) then
+    lift_percentage_value = target_level
+  else
+    lift_percentage_value = 100 - target_level
+  end
   local hundredths_lift_percentage = lift_percentage_value * 100
 
   local endpoint_id = device:component_to_endpoint(cmd.component)
@@ -437,7 +437,7 @@ local matter_driver_template = {
       [capabilities.windowShadeLevel.commands.setShadeLevel.NAME] = handle_shade_level,
     },
     [capabilities.statelessWindowShadeLevelStep.ID] = {
-      [capabilities.statelessWindowShadeLevelStep.commands.stepShadeLevel.NAME] = window_shade_step_level_cmd
+      [capabilities.statelessWindowShadeLevelStep.commands.stepShadeLevel.NAME] = handle_step_shade_level
     },
     [capabilities.windowShadeTiltLevel.ID] = {
       [capabilities.windowShadeTiltLevel.commands.setShadeTiltLevel.NAME] = handle_shade_tilt_level,
